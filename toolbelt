@@ -1,0 +1,1485 @@
+#!/usr/bin/env bash
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at https://mozilla.org/MPL/2.0/.
+#
+# Toolbelt — all the toolkits, one TUI.
+# One Linux/Termux script: bash + coreutils only, no build step, no GUI.
+#
+#   toolbelt            interactive TUI (falls back to `toolbelt list` off a TTY)
+#   toolbelt <cmd>      scriptable CLI (list, search, show, run, open, ...)
+#
+# Layout is responsive: wide (three panes) on desktop terminals, stacked
+# (list + details) on phones. Force either with TOOLBELT_LAYOUT=wide|compact.
+
+TOOLBELT_VERSION="0.2.0"
+TOOLBELT_SCRIPT="${BASH_SOURCE[0]}"
+
+# ---------------------------------------------------------------------------
+# Small helpers
+# ---------------------------------------------------------------------------
+
+die() { printf 'toolbelt: %s\n' "$1" >&2; exit "${2:-1}"; }
+
+TRIM=""
+
+trim() {
+  local text="$1"
+  text="${text#"${text%%[![:space:]]*}"}"
+  text="${text%"${text##*[![:space:]]}"}"
+  TRIM="$text"
+}
+
+REPEAT=""
+
+repeat_char() {
+  local out=""
+  printf -v out '%*s' "$2" ''
+  REPEAT="${out// /$1}"
+}
+
+# ---------------------------------------------------------------------------
+# Colors (CLI only; the TUI draws with ANSI attributes)
+# ---------------------------------------------------------------------------
+
+COLOR=0
+
+setup_colors() {
+  if [ "${NO_COLOR:-}" != "" ] || [ "${TERM:-}" = "dumb" ] || [ ! -t 1 ]; then
+    COLOR=0
+    return
+  fi
+  COLOR=1
+}
+
+c_reset() { [ "$COLOR" = 1 ] && printf '\e[0m'; }
+c_bold() { [ "$COLOR" = 1 ] && printf '\e[1m'; }
+c_dim() { [ "$COLOR" = 1 ] && printf '\e[2m'; }
+c_cyan() { [ "$COLOR" = 1 ] && printf '\e[36m'; }
+c_magenta() { [ "$COLOR" = 1 ] && printf '\e[35m'; }
+
+# ---------------------------------------------------------------------------
+# Display width: pure bash, CJK-aware, cached per character and per string.
+# No subprocess per measurement (that was the TUI's slow path).
+# ---------------------------------------------------------------------------
+
+declare -A CHAR_WIDTH=()
+declare -A CELL_CACHE=()
+
+WIDTH=0   # set by char_width / str_width / cell
+TEXT=""   # set by trunc_cols
+CELL=""   # set by cell
+
+char_width() {
+  local char="$1" code width
+  width=${CHAR_WIDTH[$char]-}
+  if [ -z "$width" ]; then
+    if [ -z "$char" ]; then
+      width=0
+    else
+      printf -v code '%d' "'$char"
+      if (( code >= 0x1100 && code <= 0x115F )) \
+        || (( code >= 0x2E80 && code <= 0x303E )) \
+        || (( code >= 0x3041 && code <= 0x33FF )) \
+        || (( code >= 0x3400 && code <= 0x4DBF )) \
+        || (( code >= 0x4E00 && code <= 0x9FFF )) \
+        || (( code >= 0xA000 && code <= 0xA4CF )) \
+        || (( code >= 0xAC00 && code <= 0xD7A3 )) \
+        || (( code >= 0xF900 && code <= 0xFAFF )) \
+        || (( code >= 0xFE30 && code <= 0xFE4F )) \
+        || (( code >= 0xFF00 && code <= 0xFF60 )) \
+        || (( code >= 0xFFE0 && code <= 0xFFE6 )) \
+        || (( code >= 0x1F300 && code <= 0x1FAFF )) \
+        || (( code >= 0x20000 && code <= 0x3FFFD )); then
+        width=2
+      else
+        width=1
+      fi
+    fi
+    CHAR_WIDTH[$char]=$width
+  fi
+  WIDTH=$width
+}
+
+str_width() {
+  local text="$1" index total=0
+  if [ -z "$text" ]; then WIDTH=0; return; fi
+  local cached=${CELL_CACHE["w$text"]-}
+  if [ -n "$cached" ]; then WIDTH=$cached; return; fi
+  for (( index = 0; index < ${#text}; index++ )); do
+    char_width "${text:index:1}"
+    total=$(( total + WIDTH ))
+  done
+  CELL_CACHE["w$text"]=$total
+  WIDTH=$total
+}
+
+# Cut to at most `cols` display columns without splitting a UTF-8 character.
+trunc_cols() {
+  local text="$1" cols="$2" length low high middle
+  TEXT=""
+  length=${#text}
+  [ "$length" -eq 0 ] && return
+  [ "$cols" -le 0 ] && return
+  str_width "$text"
+  if [ "$WIDTH" -le "$cols" ]; then TEXT=$text; return; fi
+  low=0
+  high=$length
+  while [ "$low" -lt "$high" ]; do
+    middle=$(( (low + high + 1) / 2 ))
+    str_width "${text:0:middle}"
+    if [ "$WIDTH" -le "$cols" ]; then low=$middle; else high=$(( middle - 1 )); fi
+  done
+  TEXT="${text:0:low}"
+}
+
+# Pad or truncate to exactly `cols` display columns; result in CELL.
+cell() {
+  local text pad
+  trunc_cols "$1" "$2"
+  text=$TEXT
+  str_width "$text"
+  pad=$(( $2 - WIDTH ))
+  [ "$pad" -lt 0 ] && pad=0
+  printf -v CELL '%s%*s' "$text" "$pad" ''
+}
+
+# Word-wrap into WRAP_LINES; long tokens hard-break by character.
+WRAP_LINES=()
+
+wrap_text() {
+  local text="$1" cols="$2"
+  local line="" line_width=0 word word_width index char
+  local -a words=()
+  WRAP_LINES=()
+  if [ "$cols" -le 0 ]; then
+    WRAP_LINES=("")
+    return
+  fi
+  read -r -a words <<< "$text"
+  if [ "${#words[@]}" -eq 0 ]; then
+    WRAP_LINES=("")
+    return
+  fi
+  for word in "${words[@]}"; do
+    str_width "$word"
+    word_width=$WIDTH
+    if [ "$line_width" -gt 0 ] && [ $(( line_width + 1 + word_width )) -gt "$cols" ]; then
+      WRAP_LINES+=("$line")
+      line=""
+      line_width=0
+    fi
+    if [ "$word_width" -gt "$cols" ]; then
+      line=""
+      line_width=0
+      for (( index = 0; index < ${#word}; index++ )); do
+        char="${word:index:1}"
+        char_width "$char"
+        if [ "$line_width" -gt 0 ] && [ $(( line_width + WIDTH )) -gt "$cols" ]; then
+          WRAP_LINES+=("$line")
+          line=""
+          line_width=0
+        fi
+        line+="$char"
+        line_width=$(( line_width + WIDTH ))
+      done
+      continue
+    fi
+    if [ "$line_width" -gt 0 ]; then
+      line+=" "
+      line_width=$(( line_width + 1 ))
+    fi
+    line+="$word"
+    line_width=$(( line_width + word_width ))
+  done
+  if [ "$line_width" -gt 0 ]; then
+    WRAP_LINES+=("$line")
+  elif [ "${#WRAP_LINES[@]}" -eq 0 ]; then
+    WRAP_LINES=("")
+  fi
+}
+
+json_str() {
+  local text="$1"
+  text="${text//\\/\\\\}"
+  text="${text//\"/\\\"}"
+  text="${text//$'\r'/}"
+  text="${text//$'\n'/\\n}"
+  text="${text//$'\t'/\\t}"
+  printf '"%s"' "$text"
+}
+
+# ---------------------------------------------------------------------------
+# Paths
+# ---------------------------------------------------------------------------
+
+TOOLBELT_ROOT="${TOOLBELT_ROOT:-}"
+CATALOG_INI=""
+
+resolve_paths() {
+  local source="$TOOLBELT_SCRIPT" directory candidate
+  while [ -L "$source" ]; do
+    directory=$(cd -P "$(dirname "$source")" && pwd)
+    source=$(readlink "$source")
+    case "$source" in
+      /*) ;;
+      *) source="$directory/$source" ;;
+    esac
+  done
+  directory=$(cd -P "$(dirname "$source")" && pwd)
+  if [ -z "$TOOLBELT_ROOT" ]; then
+    for candidate in "$directory" "$directory/.."; do
+      if [ -f "$candidate/catalog/toolkits.ini" ]; then
+        TOOLBELT_ROOT=$(cd -P "$candidate" && pwd)
+        break
+      fi
+    done
+  fi
+  if [ -z "$TOOLBELT_ROOT" ] && [ -f "catalog/toolkits.ini" ]; then
+    TOOLBELT_ROOT=$(pwd -P)
+  fi
+  [ -z "$TOOLBELT_ROOT" ] && die "cannot locate the repository root (catalog/toolkits.ini); set TOOLBELT_ROOT"
+  CATALOG_INI="${TOOLBELT_CATALOG:-$TOOLBELT_ROOT/catalog/toolkits.ini}"
+}
+
+# ---------------------------------------------------------------------------
+# Catalog
+# ---------------------------------------------------------------------------
+
+declare -a CAT_ID=() CAT_ZH=() CAT_EN=() CAT_ICON=() CAT_COUNT=()
+declare -a TK_ID=() TK_KIND=() TK_CAT=() TK_NAME=() TK_LANG=() TK_LICENSE=()
+declare -a TK_STATUS=() TK_URL=() TK_PATH=() TK_ENTRY=() TK_TAGS=() TK_USAGE=() TK_ZH=() TK_EN=()
+declare -A CAT_INDEX=() TK_INDEX=()
+
+STATUS_TEXT=""
+
+status_text() {
+  case "$1" in
+    active) STATUS_TEXT='● active' ;;
+    maintained) STATUS_TEXT='◐ maintained' ;;
+    archived) STATUS_TEXT='◌ archived' ;;
+    fork) STATUS_TEXT='⑂ fork' ;;
+    *) STATUS_TEXT="$1" ;;
+  esac
+}
+
+CATCOUNT=0
+
+count_category() {
+  local category="$1"
+  if [ -z "$category" ]; then
+    CATCOUNT=${#TK_ID[@]}
+  else
+    CATCOUNT=${CAT_COUNT[${CAT_INDEX[$category]}]}
+  fi
+}
+
+parse_catalog() {
+  local file="$1" line kind id key value section="" current=-1 line_number=0 index category_index
+  if [ ! -f "$file" ]; then
+    die "cannot read catalog $file"
+  fi
+  while IFS= read -r line || [ -n "$line" ]; do
+    line_number=$(( line_number + 1 ))
+    line="${line%$'\r'}"
+    trim "$line"
+    line=$TRIM
+    [ -z "$line" ] && continue
+    case "$line" in \#*) continue ;; esac
+    if [[ "$line" =~ ^\[([A-Za-z]+)[[:space:]]+(.+)\]$ ]]; then
+      kind="${BASH_REMATCH[1]}"
+      trim "${BASH_REMATCH[2]}"
+      id=$TRIM
+      if [ -n "${CAT_INDEX[$id]+x}" ] || [ -n "${TK_INDEX[$id]+x}" ]; then
+        die "catalog:$line_number: duplicate id \"$id\""
+      fi
+      case "$kind" in
+        category)
+          current=${#CAT_ID[@]}
+          CAT_ID+=("$id")
+          CAT_ZH+=("")
+          CAT_EN+=("")
+          CAT_ICON+=("•")
+          CAT_INDEX[$id]=$current
+          section="category"
+          ;;
+        toolkit)
+          current=${#TK_ID[@]}
+          TK_ID+=("$id")
+          TK_KIND+=(""); TK_CAT+=(""); TK_NAME+=(""); TK_LANG+=("")
+          TK_LICENSE+=(""); TK_STATUS+=(""); TK_URL+=(""); TK_PATH+=("")
+          TK_ENTRY+=(""); TK_TAGS+=(""); TK_USAGE+=(""); TK_ZH+=(""); TK_EN+=("")
+          TK_INDEX[$id]=$current
+          section="toolkit"
+          ;;
+        *)
+          die "catalog:$line_number: unknown section \"$kind\""
+          ;;
+      esac
+      continue
+    fi
+    case "$line" in
+      *=*) ;;
+      *) die "catalog:$line_number: expected key=value" ;;
+    esac
+    trim "${line%%=*}"
+    key=$TRIM
+    trim "${line#*=}"
+    value=$TRIM
+    [ -z "$key" ] && die "catalog:$line_number: empty key"
+    case "$section" in
+      category)
+        case "$key" in
+          zh) CAT_ZH[current]="$value" ;;
+          en) CAT_EN[current]="$value" ;;
+          icon) CAT_ICON[current]="$value" ;;
+          blurb) ;;
+          *) die "catalog:$line_number: unknown category key \"$key\"" ;;
+        esac
+        ;;
+      toolkit)
+        case "$key" in
+          kind) TK_KIND[current]="$value" ;;
+          category) TK_CAT[current]="$value" ;;
+          name) TK_NAME[current]="$value" ;;
+          language) TK_LANG[current]="$value" ;;
+          license) TK_LICENSE[current]="$value" ;;
+          status) TK_STATUS[current]="$value" ;;
+          url) TK_URL[current]="$value" ;;
+          path) TK_PATH[current]="$value" ;;
+          entry) TK_ENTRY[current]="$value" ;;
+          tags) TK_TAGS[current]="$value" ;;
+          usage) TK_USAGE[current]="$value" ;;
+          zh) TK_ZH[current]="$value" ;;
+          en) TK_EN[current]="$value" ;;
+          *) die "catalog:$line_number: unknown toolkit key \"$key\"" ;;
+        esac
+        ;;
+      *)
+        die "catalog:$line_number: key outside a section"
+        ;;
+    esac
+  done < "$file"
+  validate_catalog
+  for (( category_index = 0; category_index < ${#CAT_ID[@]}; category_index++ )); do
+    CAT_COUNT+=("0")
+  done
+  for (( index = 0; index < ${#TK_ID[@]}; index++ )); do
+    category_index=${CAT_INDEX[${TK_CAT[index]}]}
+    CAT_COUNT[category_index]=$(( CAT_COUNT[category_index] + 1 ))
+  done
+}
+
+validate_catalog() {
+  local index other
+  [ "${#CAT_ID[@]}" -eq 0 ] && die "catalog: no categories"
+  [ "${#TK_ID[@]}" -eq 0 ] && die "catalog: no toolkits"
+  for (( index = 0; index < ${#CAT_ID[@]}; index++ )); do
+    [ -z "${CAT_ZH[index]}" ] && die "catalog: category \"${CAT_ID[index]}\" needs zh"
+    [ -z "${CAT_EN[index]}" ] && die "catalog: category \"${CAT_ID[index]}\" needs en"
+  done
+  for (( index = 0; index < ${#TK_ID[@]}; index++ )); do
+    local id="${TK_ID[index]}"
+    case "${TK_KIND[index]}" in
+      repo|tool) ;;
+      *) die "catalog: toolkit \"$id\" needs kind repo or tool" ;;
+    esac
+    case "${TK_STATUS[index]}" in
+      active|maintained|archived|fork) ;;
+      *) die "catalog: toolkit \"$id\" has an unknown status" ;;
+    esac
+    [ -z "${CAT_INDEX[${TK_CAT[index]}]+x}" ] && die "catalog: toolkit \"$id\" has an unknown category"
+    [ -z "${TK_NAME[index]}" ] && die "catalog: toolkit \"$id\" needs name"
+    [ -z "${TK_LANG[index]}" ] && die "catalog: toolkit \"$id\" needs language"
+    [ -z "${TK_LICENSE[index]}" ] && die "catalog: toolkit \"$id\" needs license"
+    [ -z "${TK_TAGS[index]}" ] && die "catalog: toolkit \"$id\" needs tags"
+    [ -z "${TK_ZH[index]}" ] && die "catalog: toolkit \"$id\" needs a zh tagline"
+    [ -z "${TK_EN[index]}" ] && die "catalog: toolkit \"$id\" needs an en tagline"
+    if [ "${TK_KIND[index]}" = repo ]; then
+      [ -z "${TK_URL[index]}" ] && die "catalog: repo \"$id\" needs url"
+    else
+      [ -z "${TK_PATH[index]}" ] && die "catalog: tool \"$id\" needs path"
+      [ -z "${TK_ENTRY[index]}" ] && die "catalog: tool \"$id\" needs entry"
+    fi
+    for (( other = 0; other < index; other++ )); do
+      [ "${TK_ID[other]}" = "$id" ] && die "catalog: duplicate toolkit \"$id\""
+    done
+  done
+}
+
+declare -a FILTERED=()
+
+filter_toolkits() {
+  local category="$1" kind="$2" query="${3:-}" index haystack
+  FILTERED=()
+  query="${query,,}"
+  for (( index = 0; index < ${#TK_ID[@]}; index++ )); do
+    if [ -n "$category" ] && [ "${TK_CAT[index]}" != "$category" ]; then
+      continue
+    fi
+    if [ -n "$kind" ] && [ "${TK_KIND[index]}" != "$kind" ]; then
+      continue
+    fi
+    if [ -n "$query" ]; then
+      haystack="${TK_ID[index]} ${TK_NAME[index]} ${TK_LANG[index]} ${TK_LICENSE[index]} ${TK_CAT[index]} ${TK_TAGS[index]} ${TK_ZH[index]} ${TK_EN[index]}"
+      case "${haystack,,}" in
+        *"$query"*) ;;
+        *) continue ;;
+      esac
+    fi
+    FILTERED+=("$index")
+  done
+}
+
+find_toolkit() {
+  local id="$1"
+  if [ -n "${TK_INDEX[$id]+x}" ]; then
+    printf '%s' "${TK_INDEX[$id]}"
+    return 0
+  fi
+  return 1
+}
+
+entry_path() {
+  printf '%s/%s' "$TOOLBELT_ROOT" "$1"
+}
+
+# ---------------------------------------------------------------------------
+# CLI commands
+# ---------------------------------------------------------------------------
+
+print_toolkit_row() {
+  local index="$1" name meta name_cell meta_cell
+  if [ "${TK_KIND[index]}" = tool ]; then
+    name="⚙ ${TK_NAME[index]}"
+  else
+    name="${TK_NAME[index]}"
+  fi
+  meta="${TK_LANG[index]} · ${TK_LICENSE[index]} · ${TK_STATUS[index]}"
+  cell "$name" 32; name_cell=$CELL
+  cell "$meta" 30; meta_cell=$CELL
+  printf '  %s%s%s %s%s%s %s\n' "$(c_bold)" "$name_cell" "$(c_reset)" "$(c_dim)" "$meta_cell" "$(c_reset)" "${TK_ZH[index]}"
+}
+
+print_grouped() {
+  local category_index index in_category printed=0 category
+  for (( category_index = 0; category_index < ${#CAT_ID[@]}; category_index++ )); do
+    category="${CAT_ID[category_index]}"
+    in_category=0
+    for index in "${FILTERED[@]}"; do
+      [ "${TK_CAT[index]}" = "$category" ] && in_category=$(( in_category + 1 ))
+    done
+    [ "$in_category" -eq 0 ] && continue
+    printed=1
+    printf '%s%s%s %s · %s  (%s)%s\n' "$(c_magenta)" "$(c_bold)" "${CAT_ICON[category_index]}" "${CAT_ZH[category_index]}" "${CAT_EN[category_index]}" "$in_category" "$(c_reset)"
+    for index in "${FILTERED[@]}"; do
+      [ "${TK_CAT[index]}" = "$category" ] && print_toolkit_row "$index"
+    done
+    printf '\n'
+  done
+  [ "$printed" -eq 0 ] && printf '  no toolkits matched\n'
+}
+
+json_toolkit_array() {
+  local index separator=""
+  printf '[\n'
+  for index in "${FILTERED[@]}"; do
+    printf '%s' "$separator"
+    json_toolkit "$index" '  '
+    separator=$',\n'
+  done
+  printf '\n]\n'
+}
+
+json_toolkit() {
+  local index="$1" indent="$2" category_name_zh category_name_en tags=() tag tag_json=""
+  category_name_zh="${CAT_ZH[${CAT_INDEX[${TK_CAT[index]}]}]}"
+  category_name_en="${CAT_EN[${CAT_INDEX[${TK_CAT[index]}]}]}"
+  printf '%s{\n' "$indent"
+  printf '%s  "id": %s,\n' "$indent" "$(json_str "${TK_ID[index]}")"
+  printf '%s  "name": %s,\n' "$indent" "$(json_str "${TK_NAME[index]}")"
+  printf '%s  "kind": %s,\n' "$indent" "$(json_str "${TK_KIND[index]}")"
+  printf '%s  "category": %s,\n' "$indent" "$(json_str "${TK_CAT[index]}")"
+  printf '%s  "categoryName": {"zh": %s, "en": %s},\n' "$indent" "$(json_str "$category_name_zh")" "$(json_str "$category_name_en")"
+  printf '%s  "language": %s,\n' "$indent" "$(json_str "${TK_LANG[index]}")"
+  printf '%s  "license": %s,\n' "$indent" "$(json_str "${TK_LICENSE[index]}")"
+  printf '%s  "status": %s,\n' "$indent" "$(json_str "${TK_STATUS[index]}")"
+  IFS=',' read -r -a tags <<< "${TK_TAGS[index]}"
+  for tag in "${tags[@]}"; do
+    trim "$tag"
+    tag=$TRIM
+    [ -z "$tag" ] && continue
+    [ -n "$tag_json" ] && tag_json+=", "
+    tag_json+="$(json_str "$tag")"
+  done
+  printf '%s  "tags": [%s],\n' "$indent" "$tag_json"
+  printf '%s  "tagline": {"zh": %s, "en": %s},\n' "$indent" "$(json_str "${TK_ZH[index]}")" "$(json_str "${TK_EN[index]}")"
+  if [ "${TK_KIND[index]}" = repo ]; then
+    printf '%s  "url": %s\n' "$indent" "$(json_str "${TK_URL[index]}")"
+  else
+    printf '%s  "path": %s,\n' "$indent" "$(json_str "${TK_PATH[index]}")"
+    printf '%s  "entry": %s' "$indent" "$(json_str "${TK_ENTRY[index]}")"
+    if [ -n "${TK_USAGE[index]}" ]; then
+      printf ',\n%s  "usage": %s' "$indent" "$(json_str "${TK_USAGE[index]}")"
+    fi
+    printf '\n'
+  fi
+  printf '%s}' "$indent"
+}
+
+cmd_list() {
+  filter_toolkits "${CATEGORY:-}" "${KIND:-}" ""
+  if [ "$JSON" = 1 ]; then
+    json_toolkit_array
+    return 0
+  fi
+  print_grouped
+  if [ "${#FILTERED[@]}" -gt 0 ]; then
+    printf '%s  %s toolkits · toolbelt show <id> for details · toolbelt to browse%s\n' "$(c_dim)" "${#FILTERED[@]}" "$(c_reset)"
+  fi
+}
+
+cmd_search() {
+  local query="$1"
+  [ -z "$query" ] && die "search needs a query, e.g. \`toolbelt search kernel\`" 2
+  filter_toolkits "${CATEGORY:-}" "${KIND:-}" "$query"
+  if [ "$JSON" = 1 ]; then
+    json_toolkit_array
+    return 0
+  fi
+  printf '%s  matches for "%s"  (%s)%s\n' "$(c_bold)" "$query" "${#FILTERED[@]}" "$(c_reset)"
+  print_grouped
+}
+
+cmd_show() {
+  local id="$1" index category_index
+  [ -z "$id" ] && die "show needs a toolkit id, e.g. \`toolbelt show dsh-termux-toolkit\`" 2
+  index=$(find_toolkit "$id") || die "unknown toolkit \"$id\"; try \`toolbelt search $id\`" 2
+  if [ "$JSON" = 1 ]; then
+    json_toolkit "$index" ''
+    printf '\n'
+    return 0
+  fi
+  category_index="${CAT_INDEX[${TK_CAT[index]}]}"
+  printf '%s%s%s%s\n' "$(c_bold)" "$(c_cyan)" "${TK_ID[index]}" "$(c_reset)"
+  status_text "${TK_STATUS[index]}"
+  printf '  status    %s · %s · %s\n' "$STATUS_TEXT" "${TK_KIND[index]}" "${TK_LANG[index]}"
+  printf '  license   %s\n' "${TK_LICENSE[index]}"
+  printf '  category  %s · %s (%s)\n' "${CAT_ZH[category_index]}" "${CAT_EN[category_index]}" "${TK_CAT[index]}"
+  printf '  tags      %s\n' "${TK_TAGS[index]}"
+  if [ "${TK_KIND[index]}" = repo ]; then
+    printf '  repo      %s\n' "${TK_URL[index]}"
+  else
+    printf '  path      %s\n' "${TK_PATH[index]}"
+    printf '  entry     %s\n' "${TK_ENTRY[index]}"
+  fi
+  printf '  zh        %s\n' "${TK_ZH[index]}"
+  printf '  en        %s\n' "${TK_EN[index]}"
+  [ -n "${TK_USAGE[index]}" ] && printf '  usage     %s\n' "${TK_USAGE[index]}"
+}
+
+cmd_categories() {
+  local index separator=""
+  if [ "$JSON" = 1 ]; then
+    printf '[\n'
+    for (( index = 0; index < ${#CAT_ID[@]}; index++ )); do
+      printf '%s' "$separator"
+      count_category "${CAT_ID[index]}"
+      printf '  {"id": %s, "zh": %s, "en": %s, "count": %s}' \
+        "$(json_str "${CAT_ID[index]}")" "$(json_str "${CAT_ZH[index]}")" \
+        "$(json_str "${CAT_EN[index]}")" "$CATCOUNT"
+      separator=$',\n'
+    done
+    printf '\n]\n'
+    return 0
+  fi
+  for (( index = 0; index < ${#CAT_ID[@]}; index++ )); do
+    count_category "${CAT_ID[index]}"
+    printf '  %-14s %3s  %s %s · %s\n' "${CAT_ID[index]}" "$CATCOUNT" \
+      "${CAT_ICON[index]}" "${CAT_ZH[index]}" "${CAT_EN[index]}"
+  done
+}
+
+cmd_stats() {
+  local index tools=0 separator=""
+  for (( index = 0; index < ${#TK_ID[@]}; index++ )); do
+    [ "${TK_KIND[index]}" = tool ] && tools=$(( tools + 1 ))
+  done
+  if [ "$JSON" = 1 ]; then
+    printf '{\n  "total": %s,\n  "categories": [\n' "${#TK_ID[@]}"
+    for (( index = 0; index < ${#CAT_ID[@]}; index++ )); do
+      printf '%s' "$separator"
+      count_category "${CAT_ID[index]}"
+      printf '    {"id": %s, "zh": %s, "en": %s, "count": %s}' \
+        "$(json_str "${CAT_ID[index]}")" "$(json_str "${CAT_ZH[index]}")" \
+        "$(json_str "${CAT_EN[index]}")" "$CATCOUNT"
+      separator=$',\n'
+    done
+    printf '\n  ],\n  "kinds": {"repo": %s, "tool": %s},\n' "$(( ${#TK_ID[@]} - tools ))" "$tools"
+    printf '  "statuses": {'
+    local first=1 status count
+    for status in active maintained archived fork; do
+      count=0
+      for (( index = 0; index < ${#TK_ID[@]}; index++ )); do
+        [ "${TK_STATUS[index]}" = "$status" ] && count=$(( count + 1 ))
+      done
+      [ "$count" -eq 0 ] && continue
+      [ "$first" -eq 0 ] && printf ', '
+      printf '%s: %s' "$(json_str "$status")" "$count"
+      first=0
+    done
+    printf '},\n  "languages": {'
+    first=1
+    local language other seen
+    for (( index = 0; index < ${#TK_ID[@]}; index++ )); do
+      language="${TK_LANG[index]}"
+      seen=0
+      for (( other = 0; other < index; other++ )); do
+        [ "${TK_LANG[other]}" = "$language" ] && seen=1 && break
+      done
+      [ "$seen" -eq 1 ] && continue
+      count=0
+      for (( other = 0; other < ${#TK_ID[@]}; other++ )); do
+        [ "${TK_LANG[other]}" = "$language" ] && count=$(( count + 1 ))
+      done
+      [ "$first" -eq 0 ] && printf ', '
+      printf '%s: %s' "$(json_str "$language")" "$count"
+      first=0
+    done
+    printf '}\n}\n'
+    return 0
+  fi
+  printf '%s  %s toolkits in %s categories%s\n\n' "$(c_bold)" "${#TK_ID[@]}" "${#CAT_ID[@]}" "$(c_reset)"
+  for (( index = 0; index < ${#CAT_ID[@]}; index++ )); do
+    count_category "${CAT_ID[index]}"
+    printf '  %3s  %-14s %s · %s\n' "$CATCOUNT" "${CAT_ID[index]}" "${CAT_ZH[index]}" "${CAT_EN[index]}"
+  done
+  printf '\n  kinds:     repo=%s  tool=%s\n' "$(( ${#TK_ID[@]} - tools ))" "$tools"
+}
+
+cmd_doctor() {
+  local failed=0 missing="" index entry tool_count=0 label
+  local -a labels=() oks=()
+  labels+=("catalog: ${#TK_ID[@]} toolkits in ${#CAT_ID[@]} categories")
+  oks+=(1)
+  for (( index = 0; index < ${#TK_ID[@]}; index++ )); do
+    [ "${TK_KIND[index]}" = tool ] || continue
+    tool_count=$(( tool_count + 1 ))
+    entry=$(entry_path "${TK_ENTRY[index]}")
+    if [ ! -f "$entry" ]; then
+      [ -n "$missing" ] && missing+=", "
+      missing+="${TK_ID[index]}"
+    fi
+  done
+  if [ -n "$missing" ]; then
+    labels+=("bundled tool entries ($tool_count) missing: $missing")
+    oks+=(0)
+    failed=$(( failed + 1 ))
+  else
+    labels+=("bundled tool entries ($tool_count) present")
+    oks+=(1)
+  fi
+  labels+=("bash: ${BASH_VERSION}")
+  oks+=(1)
+  labels+=("platform: $(uname -s)-$(uname -m)")
+  oks+=(1)
+  if [ -t 0 ] && [ -t 1 ]; then
+    labels+=("terminal: interactive (TUI available)")
+  else
+    labels+=("terminal: not a TTY (TUI disabled)")
+  fi
+  oks+=(1)
+  term_size
+  tui_layout
+  labels+=("layout: $LAYOUT (${COLS}x${ROWS})")
+  oks+=(1)
+  if [ "$JSON" = 1 ]; then
+    printf '{"ok": %s, "checks": [\n' "$([ "$failed" -eq 0 ] && printf true || printf false)"
+    local separator=""
+    for (( index = 0; index < ${#labels[@]}; index++ )); do
+      printf '%s' "$separator"
+      printf '  {"ok": %s, "label": %s}' "$([ "${oks[index]}" -eq 1 ] && printf true || printf false)" "$(json_str "${labels[index]}")"
+      separator=$',\n'
+    done
+    printf '\n]}\n'
+  else
+    for (( index = 0; index < ${#labels[@]}; index++ )); do
+      if [ "${oks[index]}" -eq 1 ]; then printf '  ✓ %s\n' "${labels[index]}"; else printf '  ✗ %s\n' "${labels[index]}"; fi
+    done
+    if [ "$failed" -eq 0 ]; then printf '\n  all checks passed\n'; else printf '\n  some checks failed\n'; fi
+  fi
+  [ "$failed" -eq 0 ]
+}
+
+cmd_open() {
+  local id="$1" index opener
+  [ -z "$id" ] && die "open needs a toolkit id" 2
+  index=$(find_toolkit "$id") || die "unknown toolkit \"$id\"" 2
+  if [ "${TK_KIND[index]}" = tool ]; then
+    entry_path "${TK_ENTRY[index]}"
+    printf '\n'
+    return 0
+  fi
+  for opener in termux-open-url xdg-open open; do
+    if command -v "$opener" >/dev/null 2>&1; then
+      if "$opener" "${TK_URL[index]}" >/dev/null 2>&1; then
+        printf '%s  (opened with %s)\n' "${TK_URL[index]}" "$opener"
+        return 0
+      fi
+    fi
+  done
+  printf '%s\n' "${TK_URL[index]}"
+}
+
+cmd_run() {
+  local id="$1" index entry argument
+  shift
+  [ -z "$id" ] && die "run needs a toolkit id, e.g. \`toolbelt run portscan -- host 1-1024\`" 2
+  index=$(find_toolkit "$id") || die "unknown toolkit \"$id\""
+  if [ "${TK_KIND[index]}" != tool ]; then
+    die "\"$id\" is a repository, not a bundled tool; use \`toolbelt open $id\`" 2
+  fi
+  entry=$(entry_path "${TK_ENTRY[index]}")
+  [ -f "$entry" ] || die "missing entry ${TK_ENTRY[index]}; is the checkout complete?"
+  case "$entry" in
+    *.sh) printf '+ bash %s' "${TK_ENTRY[index]}" >&2 ;;
+    *) printf '+ %s' "${TK_ENTRY[index]}" >&2 ;;
+  esac
+  for argument in "$@"; do printf ' %s' "$argument" >&2; done
+  printf '\n' >&2
+  case "$entry" in
+    *.sh) exec bash "$entry" "$@" ;;
+    *) exec "$entry" "$@" ;;
+  esac
+}
+
+cmd_help() {
+  cat <<'EOF'
+Toolbelt — all the toolkits, one TUI.
+
+Usage:
+  toolbelt                      open the TUI (lists the catalog when stdout is not a TTY)
+  toolbelt tui                  open the TUI
+  toolbelt list [options]       list every toolkit
+  toolbelt search <query...>    search names, tags, languages and descriptions
+  toolbelt show <id>            show one toolkit in detail
+  toolbelt run <id> [-- args]   run a bundled tool
+  toolbelt open <id>            open a repository (or print the entry path of a tool)
+  toolbelt categories           list categories and their counts
+  toolbelt stats                catalog statistics
+  toolbelt doctor               check the environment and the catalog
+  toolbelt version              print the version
+  toolbelt help                 print this help
+
+Options:
+  -c, --category <id>     only this category
+  -k, --kind <repo|tool>  only this kind
+      --json              machine-readable output
+      --no-color          disable color
+  -h, --help              print this help
+  -v, --version           print the version
+
+Environment:
+  TOOLBELT_ROOT                 repository root (default: beside this script)
+  TOOLBELT_CATALOG              catalog file (default: catalog/toolkits.ini)
+  TOOLBELT_LAYOUT               auto | wide | compact (default: auto)
+EOF
+}
+
+# ---------------------------------------------------------------------------
+# TUI
+# ---------------------------------------------------------------------------
+
+ROWS=24
+COLS=80
+TTY_SAVED=""
+TUI_ACTIVE=0
+SEL_CAT=0
+SEL_ITEM=0
+DETAIL_SCROLL=0
+MODE=browse
+QUERY=""
+INPUT=""
+MESSAGE=""
+KEY=""
+FRAME=()
+DETAIL=()
+TUI_QUIT=0
+
+tui_active() { [ -t 0 ] && [ -t 1 ]; }
+
+term_size() {
+  local size rows cols
+  size=$(stty size 2>/dev/null) || size=""
+  if [[ "$size" =~ ^([0-9]+)[[:space:]]+([0-9]+)$ ]]; then
+    rows="${BASH_REMATCH[1]}"
+    cols="${BASH_REMATCH[2]}"
+  else
+    rows=24
+    cols=80
+  fi
+  ROWS=$rows
+  COLS=$cols
+  [ "$ROWS" -lt 10 ] && ROWS=10
+  [ "$COLS" -lt 36 ] && COLS=36
+}
+
+# Wide needs room for three panes; phones and narrow terminals get the stack.
+LAYOUT=""
+
+tui_layout() {
+  case "${TOOLBELT_LAYOUT:-auto}" in
+    wide) LAYOUT=wide; return ;;
+    compact|narrow) LAYOUT=compact; return ;;
+  esac
+  if [ "$COLS" -ge 92 ]; then LAYOUT=wide; else LAYOUT=compact; fi
+}
+
+CATID=""
+
+current_category_id() {
+  if [ "$SEL_CAT" -eq 0 ]; then
+    CATID=""
+  else
+    CATID="${CAT_ID[SEL_CAT-1]}"
+  fi
+}
+
+CATLABEL=""
+
+category_label() {
+  if [ "$SEL_CAT" -eq 0 ]; then
+    CATLABEL='★ 全部'
+  else
+    CATLABEL="${CAT_ICON[SEL_CAT-1]} ${CAT_ZH[SEL_CAT-1]}"
+  fi
+}
+
+refresh_filtered() {
+  current_category_id
+  filter_toolkits "$CATID" "" "$QUERY"
+  if [ "${#FILTERED[@]}" -eq 0 ]; then
+    SEL_ITEM=0
+  elif [ "$SEL_ITEM" -ge "${#FILTERED[@]}" ]; then
+    SEL_ITEM=$(( ${#FILTERED[@]} - 1 ))
+  fi
+  [ "$SEL_ITEM" -lt 0 ] && SEL_ITEM=0
+}
+
+build_detail() {
+  local index="$1" cols="$2" category_index
+  DETAIL=()
+  [ -z "$index" ] && return 0
+  category_index="${CAT_INDEX[${TK_CAT[index]}]}"
+  DETAIL+=("${TK_ID[index]}")
+  status_text "${TK_STATUS[index]}"
+  DETAIL+=("$STATUS_TEXT · ${TK_KIND[index]} · ${TK_LANG[index]}")
+  DETAIL+=("license: ${TK_LICENSE[index]}")
+  DETAIL+=("category: ${CAT_ZH[category_index]}")
+  DETAIL+=("tags: ${TK_TAGS[index]}")
+  DETAIL+=("")
+  wrap_text "${TK_ZH[index]}" "$cols"
+  DETAIL+=("${WRAP_LINES[@]}")
+  DETAIL+=("")
+  wrap_text "${TK_EN[index]}" "$cols"
+  DETAIL+=("${WRAP_LINES[@]}")
+  DETAIL+=("")
+  if [ "${TK_KIND[index]}" = repo ]; then
+    DETAIL+=("${TK_URL[index]}")
+  else
+    DETAIL+=("entry: ${TK_ENTRY[index]}")
+  fi
+  if [ -n "${TK_USAGE[index]}" ]; then
+    DETAIL+=("")
+    wrap_text "usage: ${TK_USAGE[index]}" "$cols"
+    DETAIL+=("${WRAP_LINES[@]}")
+  fi
+  DETAIL+=("")
+  if [ "${TK_KIND[index]}" = repo ]; then
+    DETAIL+=("[o] open repository")
+  else
+    DETAIL+=("[r] run this tool")
+  fi
+}
+
+SELECTED=""
+
+selected_index() {
+  if [ "${#FILTERED[@]}" -eq 0 ]; then
+    SELECTED=""
+  else
+    SELECTED="${FILTERED[SEL_ITEM]}"
+  fi
+}
+
+TITLE=""
+
+title_line() {
+  local cols="$1" left_text=" Toolbelt " right_text inner left_width right_width fill
+  if [ "$cols" -lt 64 ]; then
+    right_text=" ${#TK_ID[@]} kits "
+  else
+    right_text=" ${#TK_ID[@]} toolkits · ${#CAT_ID[@]} categories "
+  fi
+  inner=$(( cols - 2 ))
+  str_width "$left_text"
+  left_width=$WIDTH
+  str_width "$right_text"
+  right_width=$WIDTH
+  if [ $(( left_width + right_width )) -gt "$inner" ]; then
+    trunc_cols "$right_text" $(( inner - left_width ))
+    right_text=$TEXT
+    str_width "$right_text"
+    right_width=$WIDTH
+  fi
+  fill=$(( inner - left_width - right_width ))
+  [ "$fill" -lt 0 ] && fill=0
+  repeat_char '─' "$fill"
+  printf -v TITLE '┌%s%s%s┐' "$left_text" "$REPEAT" "$right_text"
+}
+
+draw_wide() {
+  local cols="$1" rows="$2"
+  local left=$(( cols * 20 / 100 ))
+  [ "$left" -lt 14 ] && left=14
+  [ "$left" -gt 22 ] && left=22
+  local mid=$(( cols * 32 / 100 ))
+  [ "$mid" -lt 20 ] && mid=20
+  [ "$mid" -gt 38 ] && mid=38
+  local right=$(( cols - left - mid - 4 ))
+  local body=$(( rows - 4 ))
+  local bottom=$(( 2 + body ))
+
+  refresh_filtered
+  local category_total=$(( ${#CAT_ID[@]} + 1 ))
+  local category_start=0
+  if [ "$category_total" -gt "$body" ]; then
+    category_start=$(( SEL_CAT - body / 2 ))
+    [ "$category_start" -lt 0 ] && category_start=0
+    [ "$category_start" -gt $(( category_total - body )) ] && category_start=$(( category_total - body ))
+  fi
+  local item_start=0
+  if [ "${#FILTERED[@]}" -gt "$body" ]; then
+    item_start=$(( SEL_ITEM - body / 2 ))
+    [ "$item_start" -lt 0 ] && item_start=0
+    [ "$item_start" -gt $(( ${#FILTERED[@]} - body )) ] && item_start=$(( ${#FILTERED[@]} - body ))
+  fi
+  selected_index
+  build_detail "$SELECTED" "$right"
+  local detail_count=${#DETAIL[@]}
+  local detail_start="$DETAIL_SCROLL"
+  local detail_max=$(( detail_count > body ? detail_count - body : 0 ))
+  [ "$detail_start" -gt "$detail_max" ] && detail_start=$detail_max
+  [ "$detail_start" -lt 0 ] && detail_start=0
+
+  FRAME=()
+  title_line "$cols"
+  FRAME+=("$TITLE")
+  category_label
+  cell ' Categories' "$left"; local left_header=$CELL
+  cell " $CATLABEL (${#FILTERED[@]})" "$mid"; local mid_header=$CELL
+  cell ' Details' "$right"; local right_header=$CELL
+  FRAME+=($'\e[1m'"│${left_header}│${mid_header}│${right_header}│"$'\e[0m')
+
+  local row category_at item_at left_cell mid_cell detail_text index label count_text
+  for (( row = 0; row < body; row++ )); do
+    category_at=$(( category_start + row ))
+    left_cell=""
+    if [ "$category_at" -lt "$category_total" ]; then
+      if [ "$category_at" -eq 0 ]; then
+        label="★ 全部"
+        count_text="${#TK_ID[@]}"
+      else
+        label="${CAT_ICON[category_at-1]} ${CAT_ZH[category_at-1]}"
+        count_text="${CAT_COUNT[category_at-1]}"
+      fi
+      cell "$label" $(( left - ${#count_text} - 1 ))
+      left_cell="$CELL ${count_text}"
+      cell "$left_cell" "$left"
+      left_cell=$CELL
+      [ "$category_at" -eq "$SEL_CAT" ] && left_cell=$'\e[7m'"$left_cell"$'\e[0m'
+    else
+      cell "" "$left"
+      left_cell=$CELL
+    fi
+
+    item_at=$(( item_start + row ))
+    mid_cell=""
+    if [ "$item_at" -lt "${#FILTERED[@]}" ]; then
+      index="${FILTERED[item_at]}"
+      if [ "$item_at" -eq "$SEL_ITEM" ]; then
+        label="▸ ⚙ ${TK_NAME[index]}"
+        [ "${TK_KIND[index]}" != tool ] && label="▸ ${TK_NAME[index]}"
+      else
+        label="  ⚙ ${TK_NAME[index]}"
+        [ "${TK_KIND[index]}" != tool ] && label="  ${TK_NAME[index]}"
+      fi
+      cell "$label" "$mid"
+      mid_cell=$CELL
+      [ "$item_at" -eq "$SEL_ITEM" ] && mid_cell=$'\e[7m'"$mid_cell"$'\e[0m'
+    else
+      cell "" "$mid"
+      mid_cell=$CELL
+    fi
+
+    detail_text=""
+    if [ $(( detail_start + row )) -lt "$detail_count" ]; then
+      detail_text="${DETAIL[detail_start+row]}"
+    fi
+    cell "$detail_text" "$right"
+    FRAME+=("│${left_cell}│${mid_cell}│${CELL}│")
+  done
+
+  repeat_char '─' "$left"; local rule_left=$REPEAT
+  repeat_char '─' "$mid"; local rule_mid=$REPEAT
+  repeat_char '─' "$right"; local rule_right=$REPEAT
+  FRAME+=("└${rule_left}┴${rule_mid}┴${rule_right}┘")
+}
+
+draw_compact() {
+  local cols="$1" rows="$2"
+  refresh_filtered
+  local detail_rows=$(( (rows - 8) / 3 ))
+  [ "$detail_rows" -lt 3 ] && detail_rows=3
+  [ "$detail_rows" -gt 7 ] && detail_rows=7
+  local list_rows=$(( rows - detail_rows - 6 ))
+  [ "$list_rows" -lt 1 ] && list_rows=1
+
+  local item_start=0
+  if [ "${#FILTERED[@]}" -gt "$list_rows" ]; then
+    item_start=$(( SEL_ITEM - list_rows / 2 ))
+    [ "$item_start" -lt 0 ] && item_start=0
+    [ "$item_start" -gt $(( ${#FILTERED[@]} - list_rows )) ] && item_start=$(( ${#FILTERED[@]} - list_rows ))
+  fi
+  selected_index
+  build_detail "$SELECTED" $(( cols - 2 ))
+  local detail_count=${#DETAIL[@]}
+  local detail_start="$DETAIL_SCROLL"
+  local detail_max=$(( detail_count > detail_rows ? detail_count - detail_rows : 0 ))
+  [ "$detail_start" -gt "$detail_max" ] && detail_start=$detail_max
+  [ "$detail_start" -lt 0 ] && detail_start=0
+
+  FRAME=()
+  title_line "$cols"
+  FRAME+=("$TITLE")
+  category_label
+  cell " $CATLABEL · ${#FILTERED[@]}  (←→ 分类)" $(( cols - 2 ))
+  FRAME+=($'\e[1m'"│${CELL}│"$'\e[0m')
+  repeat_char '─' $(( cols - 2 )); local rule=$REPEAT
+  FRAME+=("├${rule}┤")
+
+  local row item_at index label
+  for (( row = 0; row < list_rows; row++ )); do
+    item_at=$(( item_start + row ))
+    if [ "$item_at" -lt "${#FILTERED[@]}" ]; then
+      index="${FILTERED[item_at]}"
+      if [ "${TK_KIND[index]}" = tool ]; then label="⚙ ${TK_NAME[index]}"; else label="${TK_NAME[index]}"; fi
+      if [ "$item_at" -eq "$SEL_ITEM" ]; then
+        cell "▸ $label" $(( cols - 2 ))
+        FRAME+=("│"$'\e[7m'"$CELL"$'\e[0m'"│")
+      else
+        cell "  $label" $(( cols - 2 ))
+        FRAME+=("│${CELL}│")
+      fi
+    else
+      cell "" $(( cols - 2 ))
+      FRAME+=("│${CELL}│")
+    fi
+  done
+  repeat_char '─' $(( cols - 2 )); local rule=$REPEAT
+  FRAME+=("├${rule}┤")
+  local detail_text
+  for (( row = 0; row < detail_rows; row++ )); do
+    detail_text=""
+    if [ $(( detail_start + row )) -lt "$detail_count" ]; then
+      detail_text="${DETAIL[detail_start+row]}"
+    fi
+    cell "$detail_text" $(( cols - 2 ))
+    FRAME+=("│${CELL}│")
+  done
+  FRAME+=("└${rule}┘")
+}
+
+build_help_lines() {
+  local cols="$1" row count
+  FRAME=()
+  title_line "$cols"
+  FRAME+=("$TITLE")
+  cell ' Help' $(( cols - 2 ))
+  FRAME+=($'\e[1m'"│${CELL}│"$'\e[0m')
+  local -a rows=(
+    ""
+    "↑ / k        move selection up"
+    "↓ / j        move selection down"
+    "← / h        previous category"
+    "→ / l        next category"
+    "PgUp / PgDn  first / last toolkit"
+    "g / G        first / last toolkit"
+    "/            search (Enter applies, Esc cancels)"
+    "Enter        open repository (repo) or run tool (tool)"
+    "o            open repository URL"
+    "r            run the bundled tool"
+    "[ / ]        scroll the detail pane"
+    "?            back to browsing"
+    "q / Ctrl-C   quit"
+  )
+  for row in "${rows[@]}"; do
+    cell " $row" $(( cols - 2 ))
+    FRAME+=("│${CELL}│")
+  done
+  while [ "${#FRAME[@]}" -lt $(( ROWS - 1 )) ]; do
+    cell "" $(( cols - 2 ))
+    FRAME+=("│${CELL}│")
+  done
+  FRAME+=("└${rule}┘")
+}
+
+draw_footer() {
+  local hint
+  if [ "$MODE" = search ]; then
+    cell " / ${INPUT}▏  ⏎ apply · esc cancel " "$COLS"
+    FRAME+=($'\e[1m'"$CELL"$'\e[0m')
+    return
+  fi
+  if [ -n "$MESSAGE" ]; then
+    cell " $MESSAGE" "$COLS"
+    FRAME+=("$CELL")
+    return
+  fi
+  if [ "$COLS" -ge 96 ]; then
+    hint=' ↑↓/jk move · ←→/hl category · ⏎ open · r run · / search · ? help · q quit '
+  elif [ "$COLS" -ge 64 ]; then
+    hint=' ↑↓ ←→ ⏎ open · r run · / search · ? help · q quit '
+  else
+    hint=' ↑↓ ←→ ⏎ r / ? q '
+  fi
+  cell "$hint" "$COLS"
+  FRAME+=($'\e[2m'"$CELL"$'\e[0m')
+}
+
+draw_tui() {
+  term_size
+  if [ "$MODE" = help ]; then
+    build_help_lines "$COLS"
+  else
+    tui_layout
+    if [ "$LAYOUT" = wide ]; then
+      draw_wide "$COLS" "$ROWS"
+    else
+      draw_compact "$COLS" "$ROWS"
+    fi
+    draw_footer
+  fi
+  local output=$'\e[H' line
+  for line in "${FRAME[@]}"; do
+    output+="$line"$'\e[K\r\n'
+  done
+  printf '%s' "$output"
+}
+
+tui_restore() {
+  if [ "$TUI_ACTIVE" = 1 ]; then
+    printf '\e[0m\e[?25h\e[?1049l'
+    [ -n "$TTY_SAVED" ] && stty "$TTY_SAVED" 2>/dev/null
+    TUI_ACTIVE=0
+  fi
+}
+
+tui_suspend() {
+  printf '\e[0m\e[?25h\e[?1049l'
+  [ -n "$TTY_SAVED" ] && stty "$TTY_SAVED" 2>/dev/null
+}
+
+tui_resume() {
+  stty -icanon -echo min 1 time 0 2>/dev/null
+  printf '\e[?1049h\e[?25l'
+}
+
+tui_init() {
+  TTY_SAVED=$(stty -g 2>/dev/null) || TTY_SAVED=""
+  stty -icanon -echo min 1 time 0 2>/dev/null
+  printf '\e[?1049h\e[?25l'
+  TUI_ACTIVE=1
+  trap 'tui_restore; exit 130' INT TERM
+  trap 'tui_restore' EXIT
+}
+
+read_key() {
+  local first="" second="" third="" fourth=""
+  KEY=""
+  IFS= read -rsn1 first || return 1
+  case "$first" in
+    $'\e')
+      IFS= read -rsn1 -t 0.05 second || second=""
+      case "$second" in
+        '[')
+          IFS= read -rsn1 -t 0.05 third || third=""
+          case "$third" in
+            A) KEY=up ;;
+            B) KEY=down ;;
+            C) KEY=right ;;
+            D) KEY=left ;;
+            H) KEY=home ;;
+            F) KEY=end ;;
+            [0-9])
+              IFS= read -rsn1 -t 0.05 fourth || fourth=""
+              case "$third$fourth" in
+                5~) KEY=pgup ;;
+                6~) KEY=pgdn ;;
+                1~|7~) KEY=home ;;
+                4~|8~) KEY=end ;;
+                3~) KEY=delete ;;
+                *) KEY=esc ;;
+              esac
+              ;;
+            *) KEY=esc ;;
+          esac
+          ;;
+        'O')
+          IFS= read -rsn1 -t 0.05 third || third=""
+          case "$third" in
+            A) KEY=up ;;
+            B) KEY=down ;;
+            C) KEY=right ;;
+            D) KEY=left ;;
+            H) KEY=home ;;
+            F) KEY=end ;;
+            *) KEY=esc ;;
+          esac
+          ;;
+        '') KEY=esc ;;
+        *) KEY=esc ;;
+      esac
+      ;;
+    $'\x03') KEY=ctrl-c ;;
+    $'\x7f'|$'\x08') KEY=backspace ;;
+    $'\r'|$'\n') KEY=enter ;;
+    '') KEY=esc ;;
+    *) KEY="$first" ;;
+  esac
+  return 0
+}
+
+tui_action() {
+  local kind="$1" index opener opened entry status
+  selected_index
+  index=$SELECTED
+  if [ -z "$index" ]; then
+    MESSAGE="nothing selected"
+    return
+  fi
+  if [ "${TK_KIND[index]}" = repo ]; then
+    if [ "$kind" = run ]; then
+      MESSAGE="this entry is a repository; press o to open it"
+      return
+    fi
+    opened=0
+    tui_suspend
+    for opener in termux-open-url xdg-open open; do
+      if command -v "$opener" >/dev/null 2>&1 && "$opener" "${TK_URL[index]}" >/dev/null 2>&1; then
+        opened=1
+        break
+      fi
+    done
+    tui_resume
+    if [ "$opened" = 1 ]; then MESSAGE="opened repository"; else MESSAGE="open manually: ${TK_URL[index]}"; fi
+    return
+  fi
+  if [ "$kind" = open ]; then
+    MESSAGE="this entry is a bundled tool; press r to run it"
+    return
+  fi
+  entry=$(entry_path "${TK_ENTRY[index]}")
+  if [ ! -f "$entry" ]; then
+    MESSAGE="missing entry: ${TK_ENTRY[index]}"
+    return
+  fi
+  tui_suspend
+  bash "$entry"
+  status=$?
+  tui_resume
+  if [ "$status" -eq 0 ]; then MESSAGE="ran ${TK_NAME[index]}"; else MESSAGE="${TK_NAME[index]} exited ${status}"; fi
+}
+
+tui_handle() {
+  local key="$1" count
+  if [ "$MODE" = help ]; then
+    if [ "$key" = q ]; then TUI_QUIT=1; else MODE=browse; fi
+    return
+  fi
+  if [ "$MODE" = search ]; then
+    case "$key" in
+      ctrl-c) TUI_QUIT=1 ;;
+      esc) MODE=browse; INPUT="" ;;
+      backspace) INPUT="${INPUT%?}" ;;
+      enter) QUERY="$INPUT"; SEL_ITEM=0; DETAIL_SCROLL=0; MODE=browse ;;
+      up|down|left|right|pgup|pgdn|home|end|tab) ;;
+      *) if [[ "$key" =~ ^[^[:cntrl:]]$ ]]; then INPUT+="$key"; fi ;;
+    esac
+    return
+  fi
+  case "$key" in
+    q|ctrl-c) TUI_QUIT=1 ;;
+    j|down)
+      refresh_filtered
+      count=${#FILTERED[@]}
+      [ "$SEL_ITEM" -lt $(( count - 1 )) ] && SEL_ITEM=$(( SEL_ITEM + 1 ))
+      DETAIL_SCROLL=0
+      ;;
+    k|up)
+      [ "$SEL_ITEM" -gt 0 ] && SEL_ITEM=$(( SEL_ITEM - 1 ))
+      DETAIL_SCROLL=0
+      ;;
+    h|left)
+      [ "$SEL_CAT" -gt 0 ] && SEL_CAT=$(( SEL_CAT - 1 ))
+      SEL_ITEM=0
+      DETAIL_SCROLL=0
+      ;;
+    l|right|tab)
+      [ "$SEL_CAT" -lt "${#CAT_ID[@]}" ] && SEL_CAT=$(( SEL_CAT + 1 ))
+      SEL_ITEM=0
+      DETAIL_SCROLL=0
+      ;;
+    g|pgup) SEL_ITEM=0; DETAIL_SCROLL=0 ;;
+    G|pgdn)
+      refresh_filtered
+      [ "${#FILTERED[@]}" -gt 0 ] && SEL_ITEM=$(( ${#FILTERED[@]} - 1 ))
+      DETAIL_SCROLL=0
+      ;;
+    '[')
+      if [ "$DETAIL_SCROLL" -ge 3 ]; then DETAIL_SCROLL=$(( DETAIL_SCROLL - 3 )); else DETAIL_SCROLL=0; fi
+      ;;
+    ']') DETAIL_SCROLL=$(( DETAIL_SCROLL + 3 )) ;;
+    /) MODE=search; INPUT="$QUERY"; MESSAGE="" ;;
+    '?') MODE=help ;;
+    esc) QUERY=""; INPUT=""; SEL_ITEM=0; DETAIL_SCROLL=0; MESSAGE="" ;;
+    enter|o) tui_action open ;;
+    r) tui_action run ;;
+  esac
+}
+
+tui_run() {
+  if ! tui_active; then
+    return 1
+  fi
+  TUI_QUIT=0
+  SEL_CAT=0
+  SEL_ITEM=0
+  DETAIL_SCROLL=0
+  MODE=browse
+  QUERY=""
+  INPUT=""
+  MESSAGE=""
+  tui_init
+  term_size
+  while [ "$TUI_QUIT" -eq 0 ]; do
+    draw_tui
+    read_key || break
+    MESSAGE=""
+    tui_handle "$KEY"
+  done
+  tui_restore
+  return 0
+}
+
+# ---------------------------------------------------------------------------
+# Argument parsing and dispatch
+# ---------------------------------------------------------------------------
+
+COMMAND=""
+CATEGORY=""
+KIND=""
+JSON=0
+EXTRA=()
+POSITIONAL=()
+
+parse_args() {
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --)
+        shift
+        EXTRA=("$@")
+        return 0
+        ;;
+      -c|--category)
+        [ "$#" -ge 2 ] || die "--category needs a value" 2
+        CATEGORY="$2"
+        shift 2
+        ;;
+      -k|--kind)
+        [ "$#" -ge 2 ] || die "--kind needs a value" 2
+        KIND="$2"
+        shift 2
+        ;;
+      --json)
+        JSON=1
+        shift
+        ;;
+      --no-color)
+        COLOR=0
+        shift
+        ;;
+      -h|--help)
+        cmd_help
+        exit 0
+        ;;
+      -v|--version)
+        printf 'toolbelt %s\n' "$TOOLBELT_VERSION"
+        exit 0
+        ;;
+      -*)
+        printf 'toolbelt: unknown option "%s"\n\n' "$1" >&2
+        cmd_help >&2
+        exit 2
+        ;;
+      *)
+        POSITIONAL+=("$1")
+        shift
+        ;;
+    esac
+  done
+}
+
+main() {
+  setup_colors
+  parse_args "$@"
+  local command="${POSITIONAL[0]:-}" tool_id
+  case "$command" in
+    help) cmd_help; exit 0 ;;
+    version) printf 'toolbelt %s\n' "$TOOLBELT_VERSION"; exit 0 ;;
+  esac
+  resolve_paths
+  parse_catalog "$CATALOG_INI"
+  case "$command" in
+    "")
+      if tui_active; then
+        tui_run
+        exit 0
+      fi
+      cmd_list
+      ;;
+    tui)
+      if tui_run; then exit 0; fi
+      printf 'toolbelt: no TTY; falling back to `toolbelt list`\n' >&2
+      cmd_list
+      ;;
+    list) cmd_list ;;
+    search) cmd_search "${POSITIONAL[*]:1}" ;;
+    show) cmd_show "${POSITIONAL[1]:-}" ;;
+    run)
+      tool_id="${POSITIONAL[1]:-}"
+      cmd_run "$tool_id" "${EXTRA[@]}"
+      ;;
+    open) cmd_open "${POSITIONAL[1]:-}" ;;
+    categories) cmd_categories ;;
+    stats) cmd_stats ;;
+    doctor) cmd_doctor ;;
+    *)
+      printf 'toolbelt: unknown command "%s"\n\n' "$command" >&2
+      cmd_help >&2
+      exit 2
+      ;;
+  esac
+}
+
+main "$@"

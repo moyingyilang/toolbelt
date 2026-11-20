@@ -12,7 +12,7 @@
 # Layout is responsive: wide (three panes) on desktop terminals, stacked
 # (list + details) on phones. Force either with TOOLBELT_LAYOUT=wide|compact.
 
-TOOLBELT_VERSION="0.4.0"
+TOOLBELT_VERSION="0.5.0"
 TOOLBELT_SCRIPT="${BASH_SOURCE[0]}"
 
 # ---------------------------------------------------------------------------

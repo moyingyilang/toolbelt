@@ -14,12 +14,12 @@ Linux / Termux：没有 GUI，没有网站，不支持 Windows。
 [![License: MPL-2.0](https://img.shields.io/badge/license-MPL--2.0-blue?style=flat-square)](LICENSE)
 [![TUI + CLI](https://img.shields.io/badge/mode-TUI%20%2B%20CLI-orange?style=flat-square)](toolbelt)
 
-> **状态：0.4 预览版。** 5 个工具、4 个分类，TUI 和 CLI 都已可用，腰带还会继续加长。
+> **状态：0.5 预览版。** 10 个工具、6 个分类，TUI 和 CLI 都已可用，腰带还会继续加长。
 
 ## 它是什么
 
 - **一棵工具树** —— `tools/<分类>/<名字>/run.sh` 就是入口，分类就是目录：
-  `android`、`net`、`reverse`、`termux`。
+  `android`、`efml`、`net`、`reverse`、`toolchain`、`termux`。
 - **一份只存标签的目录** —— [`catalog/toolkits.ini`](catalog/toolkits.ini) 只提供
   中英文名、标签、许可证和用法行，给界面用。不做仓库索引：这个仓库本身就是工具。
 - **一个 TUI** —— 不带参数运行 `toolbelt`，在终端里浏览、搜索、看用法、直接运行。
@@ -29,16 +29,26 @@ Linux / Termux：没有 GUI，没有网站，不支持 Windows。
 ## 目录树
 
 ```text
-tools/
-├── android/
-│   ├── android-build/
-│   └── apk-info/
-├── net/
-│   └── portscan/
-├── reverse/
-│   └── a64elf/
-└── termux/
-    └── termux-doctor/
+┌ Toolbelt ───────────────────────────── 10 kits ┐
+│ ★ 全部 · 10  (←→ 分类)                         │
+├────────────────────────────────────────────────┤
+│▸ ⚙ portscan                                    │
+│  ⚙ a64elf                                      │
+│  ⚙ ab-header                                   │
+│  ⚙ lz4-block                                   │
+│  ⚙ android-build                               │
+│  ⚙ apk-info                                    │
+│  ⚙ toolchain-doctor                            │
+│  ⚙ android-sdk-install                         │
+│  ⚙ jdk-install                                 │
+│  ⚙ termux-doctor                               │
+├────────────────────────────────────────────────┤
+│portscan                                        │
+│● active · Bash                                 │
+│license: MPL-2.0                                │
+│category: 网络                                  │
+└────────────────────────────────────────────────┘
+ ↑↓ ←→ ⏎ / ? q
 ```
 
 加一个工具 = 加一个目录 + 一节 catalog，TUI、CLI 和测试都会自动识别。
@@ -48,26 +58,36 @@ tools/
 手机终端（50 列，上下堆叠布局）：
 
 ```text
-┌ Toolbelt ────────────────────────────── 5 kits ┐
-│ ★ 全部 · 5  (←→ 分类)                          │
-├────────────────────────────────────────────────┤
-│▸ ⚙ portscan                                    │
-│  ⚙ a64elf                                      │
-│  ⚙ android-build                               │
-│  ⚙ apk-info                                    │
-│  ⚙ termux-doctor                               │
-│                                                │
-│                                                │
-│                                                │
-│                                                │
-│                                                │
-├────────────────────────────────────────────────┤
-│portscan                                        │
-│● active · Bash                                 │
-│license: MPL-2.0                                │
-│category: 网络                                  │
-└────────────────────────────────────────────────┘
- ↑↓ ←→ ⏎ / ? q
+┌ Toolbelt ──────────────────────────────────────────────────────────── 10 toolkits · 6 categories ┐
+│ Categories         │ ★ 全部 (10)                    │ Details                                    │
+│★ 全部            10│▸ ⚙ portscan                    │portscan                                    │
+│🌐 网络            1│  ⚙ a64elf                      │● active · Bash                             │
+│🔍 逆向            1│  ⚙ ab-header                   │license: MPL-2.0                            │
+│🧩 EFML 容器       2│  ⚙ lz4-block                   │category: 网络                              │
+│📱 Android 构建    2│  ⚙ android-build               │tags: network,tcp,termux                    │
+│🛠 构建工具链      3│  ⚙ apk-info                    │                                            │
+│⌨ Termux 环境      1│  ⚙ toolchain-doctor            │并行 TCP 端口扫描：纯 bash +                │
+│                    │  ⚙ android-sdk-install         │/dev/tcp，主机、端口区间、并发度全部参数化  │
+│                    │  ⚙ jdk-install                 │                                            │
+│                    │  ⚙ termux-doctor               │Parallel TCP port scan in pure bash over    │
+│                    │                                │/dev/tcp; host, port range and concurrency  │
+│                    │                                │are arguments                               │
+│                    │                                │                                            │
+│                    │                                │entry: tools/net/portscan/run.sh            │
+│                    │                                │                                            │
+│                    │                                │usage: toolbelt run portscan -- 192.168.1.1 │
+│                    │                                │1-1024 --jobs 128                           │
+│                    │                                │                                            │
+│                    │                                │[r] run this tool                           │
+│                    │                                │                                            │
+│                    │                                │                                            │
+│                    │                                │                                            │
+│                    │                                │                                            │
+│                    │                                │                                            │
+│                    │                                │                                            │
+│                    │                                │                                            │
+└────────────────────┴────────────────────────────────┴────────────────────────────────────────────┘
+ ↑↓/jk move · ←→/hl category · ⏎ run · / search · ? help · q quit
 ```
 
 桌面终端（100 列，三栏布局）：
@@ -181,6 +201,13 @@ install -m 0755 toolbelt ~/.local/bin/toolbelt      # 一般 Linux
 | --- | --- | --- |
 | **a64elf** | C | Fifteen standalone ARM64 image/ELF analysis commands: ADRP xrefs, pointer tables, function maps, string scans |
 
+### 🧩 EFML 容器 · EFML containers
+
+| tool | language | what it does |
+| --- | --- | --- |
+| **ab-header** | C | Verify and unscramble an EFML4A .ab header: self-check, compBI/uncompBI/size/flags/encFlags, block-info and data offsets |
+| **lz4-block** | C | Decode one raw LZ4 block, standard or the big-endian-offset inverted variant (LZ4Inv), with --selftest |
+
 ### 📱 Android 构建 · Android build
 
 | tool | language | what it does |
@@ -188,11 +215,26 @@ install -m 0755 toolbelt ~/.local/bin/toolbelt      # 一般 Linux
 | **android-build** | Bash | Build a Gradle Android project from the terminal: detect the JDK and SDK, run assemble<Variant>, report new APK size and SHA-256, optionally adb install |
 | **apk-info** | Bash | Inspect an APK: size, SHA-256, native ABIs and v1 signature evidence, plus package identity when aapt2/aapt is available |
 
+### 🛠 构建工具链 · Build toolchain
+
+| tool | language | what it does |
+| --- | --- | --- |
+| **toolchain-doctor** | Bash | Check a build toolchain in one pass: JDK/Gradle/Android SDK/NDK, C/CMake/zlib, Rust/Go/Node/Python, with install hints |
+| **android-sdk-install** | Bash | Install the Android command-line SDK into one directory: cmdline-tools, licenses, platform-tools/build-tools/platform, optional NDK |
+| **jdk-install** | Bash | Download, verify and extract a Temurin JDK from the Adoptium API into a user directory, printing JAVA_HOME/PATH |
+
 ### ⌨ Termux 环境 · Termux environment
 
 | tool | language | what it does |
 | --- | --- | --- |
 | **termux-doctor** | Bash | Check a Termux/Android environment: link(2) limits, Node heap, locale, storage permissions, adb/JDK/Android SDK |
+
+### EFML4A 的遗产
+
+`efml` 分类保留了夭折的 EFML4A 项目里可复用的那一半：`ab-header` 校验并解扰
+`.ab` 头，`lz4-block` 解码两种 LZ4 变体。格式笔记公开在
+[EFML4A-docs](https://github.com/moyingyilang/EFML4A-docs)。两个工具都带
+`--selftest`，首次运行按需编译。
 
 ## 添加工具
 

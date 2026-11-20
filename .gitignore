@@ -1,3 +1,5 @@
 tools/reverse/a64elf/bin/
+tools/efml/ab-header/bin/
+tools/efml/lz4-block/bin/
 *.o
 .DS_Store

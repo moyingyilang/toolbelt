@@ -41,10 +41,10 @@ check_exit() {
 # ---- catalog and CLI ------------------------------------------------------
 
 OUT=$("$TB" --version)
-check_contains "version" "toolbelt 0.4.0" "$OUT"
+check_contains "version" "toolbelt 0.5.0" "$OUT"
 
 COUNT=$(cd "$ROOT" && "$TB" list --json | grep -c '"id":')
-if [ "$COUNT" -eq 5 ]; then ok "list --json returns 5 tools"; else fail "list --json returns 5 tools" "got $COUNT"; fi
+if [ "$COUNT" -eq 10 ]; then ok "list --json returns 10 tools"; else fail "list --json returns 10 tools" "got $COUNT"; fi
 
 OUT=$(cd "$ROOT" && "$TB" show portscan)
 check_contains "show prints the usage line" "usage" "$OUT"
@@ -54,10 +54,10 @@ OUT=$(cd "$ROOT" && "$TB" search android)
 check_contains "search finds the android tools" "android-build" "$OUT"
 
 OUT=$(cd "$ROOT" && "$TB" stats --json)
-check_contains "stats reports the total" '"total": 5' "$OUT"
+check_contains "stats reports the total" '"total": 10' "$OUT"
 
 CATS=$(cd "$ROOT" && "$TB" categories --json | grep -c '"count":')
-if [ "$CATS" -eq 4 ]; then ok "categories --json lists 4 categories"; else fail "categories --json lists 4 categories" "got $CATS"; fi
+if [ "$CATS" -eq 6 ]; then ok "categories --json lists 6 categories"; else fail "categories --json lists 6 categories" "got $CATS"; fi
 
 OUT=$(cd "$ROOT" && "$TB" doctor --json)
 check_contains "doctor passes" '"ok": true' "$OUT"
@@ -160,6 +160,30 @@ fi
 
 OUT=$("$TB" run termux-doctor 2>/dev/null)
 check_contains "termux-doctor runs its checks" "environment check" "$OUT"
+
+# ---- bundled tools: efml ------------------------------------------------
+
+if command -v cc >/dev/null 2>&1 || command -v gcc >/dev/null 2>&1; then
+  OUT=$("$TB" run ab-header -- --selftest 2>/dev/null)
+  check_contains "ab-header selftest passes" "selftest ok" "$OUT"
+  OUT=$("$TB" run lz4-block -- --selftest 2>/dev/null)
+  check_contains "lz4-block selftest passes" "selftest ok" "$OUT"
+  "$TB" run ab-header -- /dev/null >/dev/null 2>&1
+  check_exit "ab-header rejects a short file" 1 $?
+else
+  printf 'skip efml tool tests (no C compiler)\n'
+fi
+
+# ---- bundled tools: toolchain -------------------------------------------
+
+OUT=$("$TB" run toolchain-doctor 2>/dev/null)
+check_contains "toolchain-doctor runs its checks" "build toolchain check" "$OUT"
+
+OUT=$("$TB" run android-sdk-install -- --dry-run 2>/dev/null)
+check_contains "android-sdk-install plans the download" "would download" "$OUT"
+
+OUT=$("$TB" run jdk-install -- --help 2>/dev/null)
+check_contains "jdk-install shows help" "Temurin JDK" "$OUT"
 
 # ---- summary -------------------------------------------------------------
 

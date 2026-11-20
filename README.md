@@ -15,13 +15,13 @@ English | [中文](README.zh.md)
 [![License: MPL-2.0](https://img.shields.io/badge/license-MPL--2.0-blue?style=flat-square)](LICENSE)
 [![TUI + CLI](https://img.shields.io/badge/mode-TUI%20%2B%20CLI-orange?style=flat-square)](toolbelt)
 
-> **Status: 0.4 preview.** Five tools, four categories, TUI and CLI are working;
+> **Status: 0.5 preview.** Ten tools, six categories, TUI and CLI are working;
 > the belt keeps growing.
 
 ## What it is
 
 - **A tree of tools** — `tools/<category>/<name>/run.sh` is the entry point.
-  Categories are directories: `android`, `net`, `reverse`, `termux`.
+  Categories are directories: `android`, `efml`, `net`, `reverse`, `toolchain`, `termux`.
 - **A catalog with labels** — [`catalog/toolkits.ini`](catalog/toolkits.ini)
   adds the Chinese/English names, tags, license and usage line that the UI
   needs. No repository index: this repo *is* the tools.
@@ -33,16 +33,26 @@ English | [中文](README.zh.md)
 ## Tree
 
 ```text
-tools/
-├── android/
-│   ├── android-build/
-│   └── apk-info/
-├── net/
-│   └── portscan/
-├── reverse/
-│   └── a64elf/
-└── termux/
-    └── termux-doctor/
+┌ Toolbelt ───────────────────────────── 10 kits ┐
+│ ★ 全部 · 10  (←→ 分类)                         │
+├────────────────────────────────────────────────┤
+│▸ ⚙ portscan                                    │
+│  ⚙ a64elf                                      │
+│  ⚙ ab-header                                   │
+│  ⚙ lz4-block                                   │
+│  ⚙ android-build                               │
+│  ⚙ apk-info                                    │
+│  ⚙ toolchain-doctor                            │
+│  ⚙ android-sdk-install                         │
+│  ⚙ jdk-install                                 │
+│  ⚙ termux-doctor                               │
+├────────────────────────────────────────────────┤
+│portscan                                        │
+│● active · Bash                                 │
+│license: MPL-2.0                                │
+│category: 网络                                  │
+└────────────────────────────────────────────────┘
+ ↑↓ ←→ ⏎ / ? q
 ```
 
 Adding a tool means adding a directory here plus one catalog section; the TUI,
@@ -53,26 +63,36 @@ the CLI and the tests pick it up.
 On a phone terminal (50 columns, stacked layout):
 
 ```text
-┌ Toolbelt ────────────────────────────── 5 kits ┐
-│ ★ 全部 · 5  (←→ 分类)                          │
-├────────────────────────────────────────────────┤
-│▸ ⚙ portscan                                    │
-│  ⚙ a64elf                                      │
-│  ⚙ android-build                               │
-│  ⚙ apk-info                                    │
-│  ⚙ termux-doctor                               │
-│                                                │
-│                                                │
-│                                                │
-│                                                │
-│                                                │
-├────────────────────────────────────────────────┤
-│portscan                                        │
-│● active · Bash                                 │
-│license: MPL-2.0                                │
-│category: 网络                                  │
-└────────────────────────────────────────────────┘
- ↑↓ ←→ ⏎ / ? q
+┌ Toolbelt ──────────────────────────────────────────────────────────── 10 toolkits · 6 categories ┐
+│ Categories         │ ★ 全部 (10)                    │ Details                                    │
+│★ 全部            10│▸ ⚙ portscan                    │portscan                                    │
+│🌐 网络            1│  ⚙ a64elf                      │● active · Bash                             │
+│🔍 逆向            1│  ⚙ ab-header                   │license: MPL-2.0                            │
+│🧩 EFML 容器       2│  ⚙ lz4-block                   │category: 网络                              │
+│📱 Android 构建    2│  ⚙ android-build               │tags: network,tcp,termux                    │
+│🛠 构建工具链      3│  ⚙ apk-info                    │                                            │
+│⌨ Termux 环境      1│  ⚙ toolchain-doctor            │并行 TCP 端口扫描：纯 bash +                │
+│                    │  ⚙ android-sdk-install         │/dev/tcp，主机、端口区间、并发度全部参数化  │
+│                    │  ⚙ jdk-install                 │                                            │
+│                    │  ⚙ termux-doctor               │Parallel TCP port scan in pure bash over    │
+│                    │                                │/dev/tcp; host, port range and concurrency  │
+│                    │                                │are arguments                               │
+│                    │                                │                                            │
+│                    │                                │entry: tools/net/portscan/run.sh            │
+│                    │                                │                                            │
+│                    │                                │usage: toolbelt run portscan -- 192.168.1.1 │
+│                    │                                │1-1024 --jobs 128                           │
+│                    │                                │                                            │
+│                    │                                │[r] run this tool                           │
+│                    │                                │                                            │
+│                    │                                │                                            │
+│                    │                                │                                            │
+│                    │                                │                                            │
+│                    │                                │                                            │
+│                    │                                │                                            │
+│                    │                                │                                            │
+└────────────────────┴────────────────────────────────┴────────────────────────────────────────────┘
+ ↑↓/jk move · ←→/hl category · ⏎ run · / search · ? help · q quit
 ```
 
 On a desktop terminal (100 columns, three panes):
@@ -190,6 +210,13 @@ tables below are generated from it.
 | --- | --- | --- |
 | **a64elf** | C | Fifteen standalone ARM64 image/ELF analysis commands: ADRP xrefs, pointer tables, function maps, string scans |
 
+### 🧩 EFML 容器 · EFML containers
+
+| tool | language | what it does |
+| --- | --- | --- |
+| **ab-header** | C | Verify and unscramble an EFML4A .ab header: self-check, compBI/uncompBI/size/flags/encFlags, block-info and data offsets |
+| **lz4-block** | C | Decode one raw LZ4 block, standard or the big-endian-offset inverted variant (LZ4Inv), with --selftest |
+
 ### 📱 Android 构建 · Android build
 
 | tool | language | what it does |
@@ -197,11 +224,28 @@ tables below are generated from it.
 | **android-build** | Bash | Build a Gradle Android project from the terminal: detect the JDK and SDK, run assemble<Variant>, report new APK size and SHA-256, optionally adb install |
 | **apk-info** | Bash | Inspect an APK: size, SHA-256, native ABIs and v1 signature evidence, plus package identity when aapt2/aapt is available |
 
+### 🛠 构建工具链 · Build toolchain
+
+| tool | language | what it does |
+| --- | --- | --- |
+| **toolchain-doctor** | Bash | Check a build toolchain in one pass: JDK/Gradle/Android SDK/NDK, C/CMake/zlib, Rust/Go/Node/Python, with install hints |
+| **android-sdk-install** | Bash | Install the Android command-line SDK into one directory: cmdline-tools, licenses, platform-tools/build-tools/platform, optional NDK |
+| **jdk-install** | Bash | Download, verify and extract a Temurin JDK from the Adoptium API into a user directory, printing JAVA_HOME/PATH |
+
 ### ⌨ Termux 环境 · Termux environment
 
 | tool | language | what it does |
 | --- | --- | --- |
 | **termux-doctor** | Bash | Check a Termux/Android environment: link(2) limits, Node heap, locale, storage permissions, adb/JDK/Android SDK |
+
+### EFML4A leftovers
+
+The `efml` category keeps the reusable half of EFML4A, an Android mod-loader
+research project for *Arknights: Endfield* that never shipped: `ab-header`
+verifies and unscrambles a `.ab` header, `lz4-block` decodes both LZ4 variants.
+The format notes are public in
+[EFML4A-docs](https://github.com/moyingyilang/EFML4A-docs). Both tools have a
+`--selftest` and build on first use.
 
 ## Adding a tool
 

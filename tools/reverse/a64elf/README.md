@@ -11,9 +11,9 @@ addresses as arguments, so the same commands work on any AArch64 image.
 ## Build and run
 
 ```bash
-tools/a64elf/build.sh          # incremental build into tools/a64elf/bin/
-tools/a64elf/run.sh list       # list commands
-tools/a64elf/run.sh findptr image.bin 0x8a000040
+tools/reverse/a64elf/build.sh          # incremental build into tools/reverse/a64elf/bin/
+tools/reverse/a64elf/run.sh list       # list commands
+tools/reverse/a64elf/run.sh findptr image.bin 0x8a000040
 ```
 
 Through `toolbelt`:

@@ -5,7 +5,7 @@ a one-off local script where the target IP and port range were hard-coded; the
 host, ports, concurrency and timeout are now arguments.
 
 ```bash
-tools/portscan/run.sh <host> <ports> [options]
+tools/net/portscan/run.sh <host> <ports> [options]
 ```
 
 | option | meaning |
@@ -20,10 +20,10 @@ Ports accept single ports, ranges, and mixes: `22,80,443`, `1-1024`,
 
 ```bash
 # LAN sweep
-tools/portscan/run.sh 192.168.1.1 1-1024
+tools/net/portscan/run.sh 192.168.1.1 1-1024
 
 # A single service, no summary
-tools/portscan/run.sh example.com 443 -q
+tools/net/portscan/run.sh example.com 443 -q
 
 # Through toolbelt
 toolbelt run portscan -- 127.0.0.1 8000-8100 -j 32

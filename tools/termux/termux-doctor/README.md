@@ -5,7 +5,7 @@ device: hard links denied by sepolicy, the small default Node heap, missing
 wheels, locale assumptions, storage permissions and the Android toolchain.
 
 ```bash
-tools/termux-doctor/run.sh
+tools/termux/termux-doctor/run.sh
 toolbelt run termux-doctor
 ```
 

@@ -5,7 +5,7 @@ Linux. It is the generalized form of a per-project build script: project path,
 variant, clean and install used to be hard-coded.
 
 ```bash
-tools/android-build/run.sh [project] [options] [-- gradle args...]
+tools/android/android-build/run.sh [project] [options] [-- gradle args...]
 ```
 
 | option | meaning |
@@ -23,7 +23,7 @@ common locations. After the build it reports only APKs newer than the build
 start, with size and SHA-256.
 
 ```bash
-tools/android-build/run.sh ~/jmc/JMNeXt --variant release
+tools/android/android-build/run.sh ~/jmc/JMNeXt --variant release
 toolbelt run android-build -- --env
 toolbelt run android-build -- --install
 ```

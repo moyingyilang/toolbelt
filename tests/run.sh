@@ -41,23 +41,23 @@ check_exit() {
 # ---- catalog and CLI ------------------------------------------------------
 
 OUT=$("$TB" --version)
-check_contains "version" "toolbelt 0.3.0" "$OUT"
+check_contains "version" "toolbelt 0.4.0" "$OUT"
 
 COUNT=$(cd "$ROOT" && "$TB" list --json | grep -c '"id":')
-if [ "$COUNT" -eq 21 ]; then ok "list --json returns 21 toolkits"; else fail "list --json returns 21 toolkits" "got $COUNT"; fi
+if [ "$COUNT" -eq 5 ]; then ok "list --json returns 5 tools"; else fail "list --json returns 5 tools" "got $COUNT"; fi
 
 OUT=$(cd "$ROOT" && "$TB" show portscan)
 check_contains "show prints the usage line" "usage" "$OUT"
-check_contains "show prints the entry" "tools/portscan/run.sh" "$OUT"
+check_contains "show prints the entry" "tools/net/portscan/run.sh" "$OUT"
 
-OUT=$(cd "$ROOT" && "$TB" search kernel)
-check_contains "search finds kernel toolkits" "kernel_mi845_lineage" "$OUT"
+OUT=$(cd "$ROOT" && "$TB" search android)
+check_contains "search finds the android tools" "android-build" "$OUT"
 
 OUT=$(cd "$ROOT" && "$TB" stats --json)
-check_contains "stats reports the total" '"total": 21' "$OUT"
+check_contains "stats reports the total" '"total": 5' "$OUT"
 
 CATS=$(cd "$ROOT" && "$TB" categories --json | grep -c '"count":')
-if [ "$CATS" -eq 7 ]; then ok "categories --json lists 7 categories"; else fail "categories --json lists 7 categories" "got $CATS"; fi
+if [ "$CATS" -eq 4 ]; then ok "categories --json lists 4 categories"; else fail "categories --json lists 4 categories" "got $CATS"; fi
 
 OUT=$(cd "$ROOT" && "$TB" doctor --json)
 check_contains "doctor passes" '"ok": true' "$OUT"
@@ -79,9 +79,6 @@ check_exit "unknown command exits 2" 2 $?
 
 "$TB" show no-such-toolkit >/dev/null 2>&1
 check_exit "unknown toolkit exits 2" 2 $?
-
-"$TB" run dsh-termux-toolkit >/dev/null 2>&1
-check_exit "run refuses a repository" 2 $?
 
 "$TB" search >/dev/null 2>&1
 check_exit "search without a query exits 2" 2 $?

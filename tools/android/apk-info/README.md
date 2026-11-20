@@ -5,7 +5,7 @@ evidence, and — when the Android SDK is available — package identity,
 versions, label, launchable activity and permissions.
 
 ```bash
-tools/apk-info/run.sh app.apk
+tools/android/apk-info/run.sh app.apk
 toolbelt run apk-info -- app-debug.apk
 ```
 

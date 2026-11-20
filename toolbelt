@@ -12,7 +12,7 @@
 # Layout is responsive: wide (three panes) on desktop terminals, stacked
 # (list + details) on phones. Force either with TOOLBELT_LAYOUT=wide|compact.
 
-TOOLBELT_VERSION="0.5.0"
+TOOLBELT_VERSION="0.5.1"
 TOOLBELT_SCRIPT="${BASH_SOURCE[0]}"
 
 # ---------------------------------------------------------------------------
@@ -1124,13 +1124,13 @@ tui_suspend() {
 }
 
 tui_resume() {
-  stty -icanon -echo min 1 time 0 2>/dev/null
+  stty -icanon -echo -icrnl min 1 time 0 2>/dev/null
   printf '\e[?1049h\e[?25l'
 }
 
 tui_init() {
   TTY_SAVED=$(stty -g 2>/dev/null) || TTY_SAVED=""
-  stty -icanon -echo min 1 time 0 2>/dev/null
+  stty -icanon -echo -icrnl min 1 time 0 2>/dev/null
   printf '\e[?1049h\e[?25l'
   TUI_ACTIVE=1
   trap 'tui_restore; exit 130' INT TERM
@@ -1187,7 +1187,7 @@ read_key() {
     $'\x03') KEY=ctrl-c ;;
     $'\x7f'|$'\x08') KEY=backspace ;;
     $'\r'|$'\n') KEY=enter ;;
-    '') KEY=esc ;;
+    '') KEY=enter ;;
     *) KEY="$first" ;;
   esac
   return 0
@@ -1209,6 +1209,8 @@ tui_action() {
   tui_suspend
   bash "$entry"
   status=$?
+  printf '\n[toolbelt] %s exited %d — press Enter to return\n' "${TK_NAME[index]}" "$status" >&2
+  read -r _ || true
   tui_resume
   if [ "$status" -eq 0 ]; then MESSAGE="ran ${TK_NAME[index]}"; else MESSAGE="${TK_NAME[index]} exited $status"; fi
 }

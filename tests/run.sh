@@ -41,7 +41,7 @@ check_exit() {
 # ---- catalog and CLI ------------------------------------------------------
 
 OUT=$("$TB" --version)
-check_contains "version" "toolbelt 0.5.0" "$OUT"
+check_contains "version" "toolbelt 0.5.1" "$OUT"
 
 COUNT=$(cd "$ROOT" && "$TB" list --json | grep -c '"id":')
 if [ "$COUNT" -eq 10 ]; then ok "list --json returns 10 tools"; else fail "list --json returns 10 tools" "got $COUNT"; fi

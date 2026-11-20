@@ -12,6 +12,9 @@ on first use when a build step is required.
 | --- | --- | --- |
 | [`portscan`](portscan/) | Bash | Parallel TCP connect scan over `/dev/tcp` |
 | [`a64elf`](a64elf/) | C | 15 standalone ARM64 image/ELF analysis commands |
+| [`android-build`](android-build/) | Bash | Build Gradle Android projects, report or install the APKs |
+| [`apk-info`](apk-info/) | Bash | Inspect an APK: hash, ABIs, package identity |
+| [`termux-doctor`](termux-doctor/) | Bash | Check the Termux/Android environment for toolchain traps |
 
 ## Adding a tool
 

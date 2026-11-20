@@ -41,10 +41,10 @@ check_exit() {
 # ---- catalog and CLI ------------------------------------------------------
 
 OUT=$("$TB" --version)
-check_contains "version" "toolbelt 0.2.0" "$OUT"
+check_contains "version" "toolbelt 0.3.0" "$OUT"
 
 COUNT=$(cd "$ROOT" && "$TB" list --json | grep -c '"id":')
-if [ "$COUNT" -eq 18 ]; then ok "list --json returns 18 toolkits"; else fail "list --json returns 18 toolkits" "got $COUNT"; fi
+if [ "$COUNT" -eq 21 ]; then ok "list --json returns 21 toolkits"; else fail "list --json returns 21 toolkits" "got $COUNT"; fi
 
 OUT=$(cd "$ROOT" && "$TB" show portscan)
 check_contains "show prints the usage line" "usage" "$OUT"
@@ -54,7 +54,7 @@ OUT=$(cd "$ROOT" && "$TB" search kernel)
 check_contains "search finds kernel toolkits" "kernel_mi845_lineage" "$OUT"
 
 OUT=$(cd "$ROOT" && "$TB" stats --json)
-check_contains "stats reports the total" '"total": 18' "$OUT"
+check_contains "stats reports the total" '"total": 21' "$OUT"
 
 CATS=$(cd "$ROOT" && "$TB" categories --json | grep -c '"count":')
 if [ "$CATS" -eq 7 ]; then ok "categories --json lists 7 categories"; else fail "categories --json lists 7 categories" "got $CATS"; fi
@@ -130,6 +130,39 @@ if command -v cc >/dev/null 2>&1 || command -v gcc >/dev/null 2>&1; then
 else
   printf 'skip a64elf test (no C compiler)\n'
 fi
+
+# ---- bundled tool: android-build ----------------------------------------
+
+OUT=$("$TB" run android-build -- --help 2>/dev/null)
+check_contains "android-build shows help" "build an Android Gradle project" "$OUT"
+
+EMPTY_DIR=$(mktemp -d "${TMPDIR:-/tmp}/toolbelt-empty.XXXXXX")
+"$TB" run android-build -- "$EMPTY_DIR" >/dev/null 2>&1
+check_exit "android-build rejects a directory without gradlew" 1 $?
+rm -rf "$EMPTY_DIR"
+
+# ---- bundled tool: apk-info ---------------------------------------------
+
+if command -v python3 >/dev/null 2>&1; then
+  FAKE_APK=$(mktemp "${TMPDIR:-/tmp}/toolbelt-apk.XXXXXX.zip")
+  python3 - "$FAKE_APK" <<'PY'
+import sys, zipfile
+with zipfile.ZipFile(sys.argv[1], "w") as archive:
+    archive.writestr("AndroidManifest.xml", b"\x00")
+    archive.writestr("lib/arm64-v8a/libx.so", b"\x7fELF")
+PY
+  OUT=$("$TB" run apk-info -- "$FAKE_APK" 2>/dev/null)
+  check_contains "apk-info reports sha256" "sha256" "$OUT"
+  check_contains "apk-info lists the ABI" "arm64-v8a" "$OUT"
+  rm -f "$FAKE_APK"
+else
+  printf 'skip apk-info test (python3 is unavailable)\n'
+fi
+
+# ---- bundled tool: termux-doctor ----------------------------------------
+
+OUT=$("$TB" run termux-doctor 2>/dev/null)
+check_contains "termux-doctor runs its checks" "environment check" "$OUT"
 
 # ---- summary -------------------------------------------------------------
 

@@ -13,11 +13,11 @@
 [![License: MPL-2.0](https://img.shields.io/badge/license-MPL--2.0-blue?style=flat-square)](LICENSE)
 [![TUI + CLI](https://img.shields.io/badge/mode-TUI%20%2B%20CLI-orange?style=flat-square)](toolbelt)
 
-> **状态：0.2 预览版。** TUI、CLI、响应式布局和内置工具都已可用，工具集还在持续补充。
+> **状态：0.3 预览版。** TUI、CLI、响应式布局和内置工具都已可用，工具集还在持续补充。
 
 ## 它是什么
 
-- **一份目录** —— 7 个分类、18 个工具集，写在
+- **一份目录** —— 7 个分类、21 个工具集，写在
   [`catalog/toolkits.ini`](catalog/toolkits.ini) 里。只收录公开仓库；
   本机那些高度特化的工具会被通用化后放进 [`tools/`](tools/)。
 - **一个 TUI** —— 不带参数运行 `toolbelt`，在终端里浏览、搜索、打开仓库或运行内置工具。
@@ -31,43 +31,46 @@
 手机终端（50 列，上下堆叠布局）：
 
 ```text
-┌ Toolbelt ───────────────────────────── 18 kits ┐
-│ ★ 全部 · 18  (←→ 分类)                         │
+┌ Toolbelt ───────────────────────────── 21 kits ┐
+│ ★ 全部 · 21  (←→ 分类)                         │
 ├────────────────────────────────────────────────┤
 │▸ ⚙ portscan                                    │
 │  ⚙ a64elf                                      │
+│  ⚙ android-build                               │
+│  ⚙ apk-info                                    │
+│  ⚙ termux-doctor                               │
 │  dsh-termux-toolkit                            │
 │  dsh-plugins                                   │
 │  android-termux-builders4JMNeXt                │
 │  Fuck4DuerOS                                   │
 │  EFML4A-docs                                   │
-│  Zygisk-Il2CppDumper                           │
-│  android_kernel_XiaoDu_RMX3511                 │
-│  kernel_mi845_lineage                          │
 ├────────────────────────────────────────────────┤
 │portscan                                        │
 │● active · tool · Bash                          │
 │license: MPL-2.0                                │
 │category: 内置工具箱                            │
 └────────────────────────────────────────────────┘
- ↑↓ ←→ ⏎ r / ? q                                  
+ ↑↓ ←→ ⏎ r / ? q
 ```
 
 桌面终端（100 列，三栏布局）：
 
 ```text
-┌ Toolbelt ──────────────────────────────────────────────────────────── 18 toolkits · 7 categories ┐
-│ Categories         │ ★ 全部 (18)                    │ Details                                    │
-│★ 全部            18│▸ ⚙ portscan                    │portscan                                    │
-│⚙ 内置工具箱       2│  ⚙ a64elf                      │● active · tool · Bash                      │
-│⌨ Termux 与 DSH    3│  dsh-termux-toolkit            │license: MPL-2.0                            │
-│🔍 Android 逆向    3│  dsh-plugins                   │category: 内置工具箱                        │
-│🔧 刷机与内核      2│  android-termux-builders4JMNeXt│tags: network,tcp,termux                    │
-│📚 漫画阅读        4│  Fuck4DuerOS                   │                                            │
-│🤖 游戏自动化      1│  EFML4A-docs                   │并行 TCP 端口扫描：纯 bash +                │
-│🌐 站点与 Web      3│  Zygisk-Il2CppDumper           │/dev/tcp，主机、端口区间、并发度全部参数化  │
-│                    │  android_kernel_XiaoDu_RMX3511 │                                            │
-│                    │  kernel_mi845_lineage          │Parallel TCP port scan in pure bash over    │
+┌ Toolbelt ──────────────────────────────────────────────────────────── 21 toolkits · 7 categories ┐
+│ Categories         │ ★ 全部 (21)                    │ Details                                    │
+│★ 全部            21│▸ ⚙ portscan                    │portscan                                    │
+│⚙ 内置工具箱       5│  ⚙ a64elf                      │● active · tool · Bash                      │
+│⌨ Termux 与 DSH    3│  ⚙ android-build               │license: MPL-2.0                            │
+│🔍 Android 逆向    3│  ⚙ apk-info                    │category: 内置工具箱                        │
+│🔧 刷机与内核      2│  ⚙ termux-doctor               │tags: network,tcp,termux                    │
+│📚 漫画阅读        4│  dsh-termux-toolkit            │                                            │
+│🤖 游戏自动化      1│  dsh-plugins                   │并行 TCP 端口扫描：纯 bash +                │
+│🌐 站点与 Web      3│  android-termux-builders4JMNeXt│/dev/tcp，主机、端口区间、并发度全部参数化  │
+│                    │  Fuck4DuerOS                   │                                            │
+│                    │  EFML4A-docs                   │Parallel TCP port scan in pure bash over    │
+│                    │  Zygisk-Il2CppDumper           │/dev/tcp; host, port range and concurrency  │
+│                    │  android_kernel_XiaoDu_RMX3511 │are all arguments                           │
+│                    │  kernel_mi845_lineage          │                                            │
 ```
 
 ## 快速开始
@@ -149,6 +152,9 @@ TOOLBELT_LAYOUT=wide ./toolbelt      # 强制三栏
 | --- | --- | --- | --- |
 | **portscan** (bundled) | Bash | MPL-2.0 | Parallel TCP port scan in pure bash over /dev/tcp; host, port range and concurrency are all arguments |
 | **a64elf** (bundled) | C | MPL-2.0 | Fifteen standalone ARM64 image/ELF analysis commands: ADRP xrefs, pointer tables, function maps, string scans |
+| **android-build** (bundled) | Bash | MPL-2.0 | Build a Gradle Android project from the terminal: detect the JDK and SDK, run assemble<Variant>, report new APK size and SHA-256, optionally adb install |
+| **apk-info** (bundled) | Bash | MPL-2.0 | Inspect an APK: size, SHA-256, native ABIs and v1 signature evidence, plus package identity when aapt2/aapt is available |
+| **termux-doctor** (bundled) | Bash | MPL-2.0 | Check a Termux/Android environment: link(2) limits, Node heap, locale, storage permissions, adb/JDK/Android SDK |
 
 ### ⌨ Termux 与 DSH · Termux & DSH
 
@@ -218,6 +224,34 @@ tools/a64elf/build.sh
 tools/a64elf/run.sh list
 tools/a64elf/run.sh findptr image.bin 0x8a000040
 toolbelt run a64elf -- basefind uboot.img
+```
+
+### android-build
+
+在终端里构建 Gradle Android 工程：检测 JDK 与 SDK，跑 `assemble<Variant>`，
+只报告本次新产出的 APK，可选 `adb install`。
+
+```bash
+toolbelt run android-build -- ~/jmc/JMNeXt --variant release
+toolbelt run android-build -- --env
+```
+
+### apk-info
+
+不开 Android Studio 检查 APK：大小、SHA-256、原生 ABI、v1 签名痕迹；有 aapt2/aapt
+时再给出包名、版本和启动 Activity。
+
+```bash
+toolbelt run apk-info -- app-release.apk
+```
+
+### termux-doctor
+
+检查 Termux/Android 环境里会让工具链翻车的坑：`link(2)` 被拒、Node 默认堆、
+locale、存储权限、adb/JDK/Android SDK。
+
+```bash
+toolbelt run termux-doctor
 ```
 
 ## 目录结构
